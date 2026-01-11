@@ -38,20 +38,33 @@ const nodeOrdering = new Map() // nodeId -> { rank, order }
 function computeOrdering(allNodes, allEdges, containers) {
   const g = new dagre.graphlib.Graph()
   g.setDefaultEdgeLabel(() => ({}))
-  g.setGraph({ rankdir: 'TB', nodesep: 1, ranksep: 1 })
+  g.setGraph({
+    rankdir: 'TB',
+    nodesep: NODE_GAP,  // Use actual node gap
+    ranksep: RANK_GAP   // Use actual rank gap
+  })
 
-  // Add all main nodes (not container children) to Dagre with dummy sizes
+  // Add all main nodes (not container children) to Dagre with actual sizes
   const mainNodeIds = new Set()
+  const nodeSizes = new Map() // Store actual node sizes
   allNodes.forEach(node => {
     if (!containers.some(c => c.childIds.includes(node.id))) {
       mainNodeIds.add(node.id)
-      g.setNode(node.id, { width: 1, height: 1 })
+      const width = node.width || NODE_WIDTH
+      const height = node.height || NODE_HEIGHT
+      nodeSizes.set(node.id, { width, height })
+      g.setNode(node.id, { width, height })
     }
   })
 
-  // Add containers as nodes
+  // Add containers as nodes with estimated sizes
+  const containerSizes = new Map()
   containers.forEach(container => {
-    g.setNode(container.id, { width: 1, height: 1 })
+    // Estimate container size (will be recalculated later)
+    const estimatedWidth = NODE_WIDTH * 2
+    const estimatedHeight = NODE_HEIGHT * 3
+    containerSizes.set(container.id, { width: estimatedWidth, height: estimatedHeight })
+    g.setNode(container.id, { width: estimatedWidth, height: estimatedHeight })
   })
 
   // Map container children to their containers
@@ -167,13 +180,27 @@ function computeOrdering(allNodes, allEdges, containers) {
     nodes.sort((a, b) => a.order - b.order)
   })
 
+  // Extract Dagre positions
+  const dagrePositions = new Map()
+  g.nodes().forEach(nodeId => {
+    const node = g.node(nodeId)
+    if (node.x !== undefined && node.y !== undefined) {
+      // Dagre positions are centered, convert to top-left
+      const size = nodeSizes.get(nodeId) || containerSizes.get(nodeId) || { width: NODE_WIDTH, height: NODE_HEIGHT }
+      dagrePositions.set(nodeId, {
+        x: node.x - size.width / 2,
+        y: node.y - size.height / 2
+      })
+    }
+  })
+
   // Debug: log ranks
   console.log('Dagre Ranks:', Array.from(rankMap.entries()).map(([rank, nodes]) => ({
     rank,
     nodes: nodes.map(n => n.id)
   })))
 
-  return { ordering, rankMap }
+  return { ordering, rankMap, dagrePositions }
 }
 
 // PHASE 2: Container-aware box layout (children vertically to show hierarchy)
@@ -246,7 +273,7 @@ function layoutContainerChildren(container, childNodes, childEdges) {
 }
 
 // PHASE 2: Layout nodes in ranks (same rank = row, deeper ranks = below)
-function layoutRanks(ordering, rankMap, allNodes, containers, existingNodes, allEdges) {
+function layoutRanks(ordering, rankMap, allNodes, containers, existingNodes, allEdges, dagrePositions) {
   const nodePositions = new Map()
   const containerData = new Map()
 
@@ -262,18 +289,28 @@ function layoutRanks(ordering, rankMap, allNodes, containers, existingNodes, all
 
   // Find max Y from existing nodes to determine starting Y for new ranks
   let maxExistingY = 0
+  let minExistingX = Infinity
+  let maxExistingX = 0
   if (existingNodes.length > 0) {
     const existingYs = Array.from(existingPositions.entries()).map(([nodeId, position]) => {
       const node = existingNodes.find(n => n.id === nodeId)
       const height = node?.height || (node?.style?.height ? parseInt(node.style.height) : null) || NODE_HEIGHT
+      const width = node?.width || NODE_WIDTH
+      minExistingX = Math.min(minExistingX, position.x)
+      maxExistingX = Math.max(maxExistingX, position.x + width)
       return position.y + height
     })
     maxExistingY = Math.max(...existingYs, 0)
   }
 
+  // Calculate offset for new nodes: place them below existing nodes
+  const yOffset = existingNodes.length > 0 && maxExistingY > 0 ? maxExistingY + RANK_GAP : 0
+
+  // Calculate X offset to align with existing nodes (optional - can be 0 to start from left)
+  const xOffset = 0
+
   // Process each rank (ranks are stacked vertically, rank 0 at top)
   const ranks = Array.from(rankMap.keys()).sort((a, b) => a - b)
-  let currentRankY = 0 // Y position for current rank (starts at top for rank 0)
 
   // Debug: log rank positions
   console.log('Layout Ranks:', ranks)
@@ -336,7 +373,7 @@ function layoutRanks(ordering, rankMap, allNodes, containers, existingNodes, all
       }
     })
 
-    // Second pass: place nodes horizontally in this rank
+    // Second pass: place nodes using Dagre positions (for new nodes) or preserve existing positions
     nodesInRank.forEach(({ id: nodeId }) => {
       const container = containers.find(c => c.id === nodeId)
 
@@ -344,40 +381,59 @@ function layoutRanks(ordering, rankMap, allNodes, containers, existingNodes, all
         const containerLayout = containerData.get(container.id)
 
         if (isExisting.has(container.id)) {
-          // Preserve existing position (only for incremental additions)
+          // Preserve existing position
           const existing = existingPositions.get(container.id)
           nodePositions.set(container.id, existing)
         } else {
-          // New container - place horizontally in rank
-          const x = currentX
-          const y = currentRankY
-          nodePositions.set(container.id, { x, y })
-          console.log(`Placed container ${container.id} at rank ${rank}, position (${x}, ${y})`)
-          currentX += containerLayout.size.width + NODE_GAP
+          // New container - use Dagre position if available, otherwise use calculated position
+          const dagrePos = dagrePositions.get(container.id)
+          if (dagrePos) {
+            // Use Dagre position with offset for new nodes
+            nodePositions.set(container.id, {
+              x: dagrePos.x + xOffset,
+              y: dagrePos.y + yOffset
+            })
+            console.log(`Placed container ${container.id} using Dagre at (${dagrePos.x + xOffset}, ${dagrePos.y + yOffset})`)
+          } else {
+            // Fallback to calculated position
+            const x = currentX
+            const y = currentRankY
+            nodePositions.set(container.id, { x, y })
+            console.log(`Placed container ${container.id} at rank ${rank}, position (${x}, ${y})`)
+            currentX += containerLayout.size.width + NODE_GAP
+          }
         }
       } else {
         // Regular node
         const node = allNodes.find(n => n.id === nodeId)
         if (node) {
           if (isExisting.has(nodeId) && existingNodes.length > 0) {
-            // Preserve existing position (only for incremental additions)
+            // Preserve existing position
             const existing = existingPositions.get(nodeId)
             nodePositions.set(nodeId, existing)
           } else {
-            // New node - place horizontally in rank
-            const nodeWidth = node.width || NODE_WIDTH
-            const x = currentX
-            const y = currentRankY
-            nodePositions.set(nodeId, { x, y })
-            console.log(`Placed node ${nodeId} at rank ${rank}, position (${x}, ${y})`)
-            currentX += nodeWidth + NODE_GAP
+            // New node - use Dagre position if available
+            const dagrePos = dagrePositions.get(nodeId)
+            if (dagrePos) {
+              // Use Dagre position with offset for new nodes
+              nodePositions.set(nodeId, {
+                x: dagrePos.x + xOffset,
+                y: dagrePos.y + yOffset
+              })
+              console.log(`Placed node ${nodeId} using Dagre at (${dagrePos.x + xOffset}, ${dagrePos.y + yOffset})`)
+            } else {
+              // Fallback to calculated position
+              const nodeWidth = node.width || NODE_WIDTH
+              const x = currentX
+              const y = currentRankY
+              nodePositions.set(nodeId, { x, y })
+              console.log(`Placed node ${nodeId} at rank ${rank}, position (${x}, ${y})`)
+              currentX += nodeWidth + NODE_GAP
+            }
           }
         }
       }
     })
-
-    // Move to next rank (below current rank)
-    currentRankY += maxHeightInRank + RANK_GAP
   })
 
   return { nodePositions, containerData }
@@ -455,7 +511,7 @@ async function addToGraph({ nodes: newNodes = [], edges: newEdges = [], containe
   const allEdges = [...edges.value, ...prefixEdges]
 
   // PHASE 1: Compute ordering with Dagre
-  const { ordering, rankMap } = computeOrdering(allNodes, allEdges, allContainers)
+  const { ordering, rankMap, dagrePositions } = computeOrdering(allNodes, allEdges, allContainers)
 
   console.log('After computeOrdering:', {
     allNodesCount: allNodes.length,
@@ -473,7 +529,8 @@ async function addToGraph({ nodes: newNodes = [], edges: newEdges = [], containe
     allNodes,
     allContainers,
     nodes.value,
-    allEdges
+    allEdges,
+    dagrePositions
   )
 
   console.log('After layoutRanks:', {
