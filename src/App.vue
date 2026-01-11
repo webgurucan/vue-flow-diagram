@@ -263,10 +263,10 @@ function layoutRanks(ordering, rankMap, allNodes, containers, existingNodes, all
   // Find max Y from existing nodes to determine starting Y for new ranks
   let maxExistingY = 0
   if (existingNodes.length > 0) {
-    const existingYs = Array.from(existingPositions.values()).map(p => {
-      const node = existingNodes.find(n => n.id === Array.from(existingPositions.keys()).find(id => existingPositions.get(id) === p))
-      const height = node?.height || node?.style?.height ? parseInt(node.style.height) : NODE_HEIGHT
-      return p.y + height
+    const existingYs = Array.from(existingPositions.entries()).map(([nodeId, position]) => {
+      const node = existingNodes.find(n => n.id === nodeId)
+      const height = node?.height || (node?.style?.height ? parseInt(node.style.height) : null) || NODE_HEIGHT
+      return position.y + height
     })
     maxExistingY = Math.max(...existingYs, 0)
   }
@@ -383,19 +383,46 @@ function layoutRanks(ordering, rankMap, allNodes, containers, existingNodes, all
   return { nodePositions, containerData }
 }
 
+// Global counter for auto-generating unique prefixes
+let graphInstanceCounter = 0
+
 // PHASE 3: Incremental insertion
-async function addToGraph({ nodes: newNodes = [], edges: newEdges = [], containers: newContainers = [] }) {
+async function addToGraph({ nodes: newNodes = [], edges: newEdges = [], containers: newContainers = [] }, prefix = null) {
+  // Generate prefix if not provided
+  if (prefix === null) {
+    prefix = `graph_${graphInstanceCounter++}_`
+  }
+
+  // Apply prefix to all IDs
+  const prefixNodes = newNodes.map(node => ({
+    ...node,
+    id: `${prefix}${node.id}`
+  }))
+
+  const prefixEdges = newEdges.map(edge => ({
+    ...edge,
+    source: `${prefix}${edge.source}`,
+    target: `${prefix}${edge.target}`
+  }))
+
+  const prefixContainers = newContainers.map(container => ({
+    ...container,
+    id: `${prefix}${container.id}`,
+    childIds: container.childIds.map(childId => `${prefix}${childId}`)
+  }))
+
   // Get existing data
   const existingNodeIds = new Set(nodes.value.map(n => n.id))
   const existingContainerIds = new Set(
     nodes.value.filter(n => n.style?.border).map(n => n.id)
   )
 
-  // Filter new items
-  const nodesToAdd = newNodes.filter(n => !existingNodeIds.has(n.id))
-  const containersToAdd = newContainers.filter(c => !existingContainerIds.has(c.id))
+  // Filter new items (now using prefixed IDs)
+  const nodesToAdd = prefixNodes.filter(n => !existingNodeIds.has(n.id))
+  const containersToAdd = prefixContainers.filter(c => !existingContainerIds.has(c.id))
 
   console.log('addToGraph called:', {
+    prefix,
     newNodes: newNodes.length,
     nodesToAdd: nodesToAdd.length,
     newContainers: newContainers.length,
@@ -425,7 +452,7 @@ async function addToGraph({ nodes: newNodes = [], edges: newEdges = [], containe
     ...containersToAdd,
   ]
 
-  const allEdges = [...edges.value, ...newEdges]
+  const allEdges = [...edges.value, ...prefixEdges]
 
   // PHASE 1: Compute ordering with Dagre
   const { ordering, rankMap } = computeOrdering(allNodes, allEdges, allContainers)
@@ -454,18 +481,24 @@ async function addToGraph({ nodes: newNodes = [], edges: newEdges = [], containe
     nodePositions: Array.from(nodePositions.entries()).map(([id, pos]) => ({ id, pos }))
   })
 
-  // Convert to Vue Flow format
-  const flowNodes = []
-  const flowEdges = []
+  // Start with existing nodes and edges (keep them as-is)
+  const flowNodes = [...nodes.value]
+  const flowEdges = [...edges.value]
 
-  // Add regular nodes
-  allNodes.forEach(node => {
+  // Track which nodes we've already added to avoid duplicates
+  const addedNodeIds = new Set(flowNodes.map(n => n.id))
+  const addedEdgeIds = new Set(flowEdges.map(e => e.id))
+
+  // Track container IDs to identify them
+  const containerIds = new Set(allContainers.map(c => c.id))
+
+  // Add only NEW regular nodes (not containers, not container children)
+  nodesToAdd.forEach(node => {
     const pos = nodePositions.get(node.id)
     const isContainerChild = allContainers.some(c => c.childIds.includes(node.id))
-    if (!pos) {
-      console.warn(`Node ${node.id} has no position! isContainerChild: ${isContainerChild}`)
-    }
-    if (pos && !isContainerChild) {
+    const isContainer = containerIds.has(node.id)
+
+    if (pos && !isContainerChild && !isContainer && !addedNodeIds.has(node.id)) {
       flowNodes.push({
         id: node.id,
         type: 'default',
@@ -475,15 +508,16 @@ async function addToGraph({ nodes: newNodes = [], edges: newEdges = [], containe
         data: { label: node.id },
         draggable: true,
       })
+      addedNodeIds.add(node.id)
     }
   })
 
-  // Add containers and their children
-  allContainers.forEach(container => {
+  // Add only NEW containers and their children
+  containersToAdd.forEach(container => {
     const pos = nodePositions.get(container.id)
     const layout = containerData.get(container.id)
 
-    if (pos && layout) {
+    if (pos && layout && !addedNodeIds.has(container.id)) {
       // Container node
       flowNodes.push({
         id: container.id,
@@ -502,11 +536,12 @@ async function addToGraph({ nodes: newNodes = [], edges: newEdges = [], containe
         selectable: true,
         draggable: true,
       })
+      addedNodeIds.add(container.id)
 
       // Container children
       container.childIds.forEach(childId => {
         const childPos = layout.childPositions.get(childId)
-        if (childPos) {
+        if (childPos && !addedNodeIds.has(childId)) {
           flowNodes.push({
             id: childId,
             type: 'default',
@@ -516,20 +551,25 @@ async function addToGraph({ nodes: newNodes = [], edges: newEdges = [], containe
             extent: 'parent',
             draggable: false,
           })
+          addedNodeIds.add(childId)
         }
       })
     }
   })
 
-  // Add edges
-  allEdges.forEach((edge, idx) => {
-    flowEdges.push({
-      id: `edge-${idx}`,
-      source: edge.source,
-      target: edge.target,
-      type: 'bezier',
-      animated: false,
-    })
+  // Add only NEW edges
+  prefixEdges.forEach((edge, idx) => {
+    const edgeId = `edge-${edge.source}-${edge.target}`
+    if (!addedEdgeIds.has(edgeId)) {
+      flowEdges.push({
+        id: edgeId,
+        source: edge.source,
+        target: edge.target,
+        type: 'bezier',
+        animated: false,
+      })
+      addedEdgeIds.add(edgeId)
+    }
   })
 
   console.log('Final flowNodes:', flowNodes.length, 'flowEdges:', flowEdges.length)
@@ -541,7 +581,7 @@ async function addToGraph({ nodes: newNodes = [], edges: newEdges = [], containe
 
 // Start with simple graph
 onMounted(async () => {
-  console.log('Initial graph data:', initialGraphData)
+  await addToGraph(initialGraphData)
   await addToGraph(initialGraphData)
 })
 </script>
