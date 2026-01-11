@@ -26,7 +26,7 @@ const nodes = ref([])
 const edges = ref([])
 
 // Layout constants
-const RANK_GAP = 200  // Vertical gap between ranks (rows)
+const RANK_GAP = 80  // Vertical gap between ranks (rows) - reduced for tighter spacing
 const NODE_GAP = 50   // Horizontal gap between nodes in same rank (row)
 const CONTAINER_PADDING = 20
 const CONTAINER_CHILD_GAP = 50  // Horizontal gap between children in container
@@ -581,7 +581,6 @@ async function addToGraph({ nodes: newNodes = [], edges: newEdges = [], containe
 
 // Start with simple graph
 onMounted(async () => {
-  await addToGraph(initialGraphData)
   await addToGraph(initialGraphData)
 })
 </script>
