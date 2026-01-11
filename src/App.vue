@@ -20,6 +20,7 @@ import { VueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import dagre from 'dagre'
+import { NODE_WIDTH, NODE_HEIGHT, initialGraphData } from './data'
 
 const nodes = ref([])
 const edges = ref([])
@@ -27,8 +28,6 @@ const edges = ref([])
 // Layout constants
 const RANK_GAP = 200  // Vertical gap between ranks (rows)
 const NODE_GAP = 50   // Horizontal gap between nodes in same rank (row)
-const NODE_WIDTH = 160
-const NODE_HEIGHT = 48
 const CONTAINER_PADDING = 20
 const CONTAINER_CHILD_GAP = 50  // Horizontal gap between children in container
 
@@ -542,69 +541,8 @@ async function addToGraph({ nodes: newNodes = [], edges: newEdges = [], containe
 
 // Start with simple graph
 onMounted(async () => {
-  await addToGraph({
-    nodes: [
-      { id: 'A', width: NODE_WIDTH, height: NODE_HEIGHT },
-      { id: 'B', width: NODE_WIDTH, height: NODE_HEIGHT },
-      { id: 'C', width: NODE_WIDTH, height: NODE_HEIGHT },
-      { id: 'D', width: NODE_WIDTH, height: NODE_HEIGHT },
-      { id: 'E', width: NODE_WIDTH, height: NODE_HEIGHT },
-      { id: 'F', width: NODE_WIDTH, height: NODE_HEIGHT },
-      { id: 'G', width: NODE_WIDTH, height: NODE_HEIGHT },
-      { id: 'H', width: NODE_WIDTH, height: NODE_HEIGHT },
-      { id: 'I', width: NODE_WIDTH, height: NODE_HEIGHT },
-      { id: 'J', width: NODE_WIDTH, height: NODE_HEIGHT },
-    ],
-    edges: [
-      { source: 'A', target: 'B' },
-      { source: 'A', target: 'C' },
-      { source: 'C', target: 'D' },
-      { source: 'D', target: 'E' },
-      { source: 'A', target: 'F' },
-      { source: 'F', target: 'G' },
-      { source: 'G', target: 'H' },
-      { source: 'A', target: 'I' },
-      { source: 'I', target: 'J' },
-    ],
-    containers: [
-      { id: 'C111', childIds: ['C', 'D', 'E'] },
-      { id: 'C112', childIds: ['F', 'G', 'H'] },
-      { id: 'C113', childIds: ['I', 'J', 'K'] },
-    ],
-  })
-
-  setTimeout(async () => {
-    await addToGraph({
-      nodes: [
-        { id: 'A1', width: NODE_WIDTH, height: NODE_HEIGHT },
-        { id: 'B1', width: NODE_WIDTH, height: NODE_HEIGHT },
-        { id: 'C1', width: NODE_WIDTH, height: NODE_HEIGHT },
-        { id: 'D1', width: NODE_WIDTH, height: NODE_HEIGHT },
-        { id: 'E1', width: NODE_WIDTH, height: NODE_HEIGHT },
-        { id: 'F1', width: NODE_WIDTH, height: NODE_HEIGHT },
-        { id: 'G1', width: NODE_WIDTH, height: NODE_HEIGHT },
-        { id: 'H1', width: NODE_WIDTH, height: NODE_HEIGHT },
-        { id: 'I1', width: NODE_WIDTH, height: NODE_HEIGHT },
-        { id: 'J1', width: NODE_WIDTH, height: NODE_HEIGHT },
-      ],
-      edges: [
-        { source: 'A1', target: 'B1' },
-        { source: 'A1', target: 'C1' },
-        { source: 'C1', target: 'D1' },
-        { source: 'D1', target: 'E1' },
-        { source: 'A1', target: 'F1' },
-        { source: 'F1', target: 'G1' },
-        { source: 'G1', target: 'H1' },
-        { source: 'A1', target: 'I1' },
-        { source: 'I1', target: 'J1' },
-      ],
-      containers: [
-        { id: 'C11', childIds: ['C1', 'D1', 'E1'] },
-        { id: 'C12', childIds: ['F1', 'G1', 'H1'] },
-        { id: 'C13', childIds: ['I1', 'J1', 'K1'] },
-      ],
-    })
-  }, 2000)
+  console.log('Initial graph data:', initialGraphData)
+  await addToGraph(initialGraphData)
 })
 </script>
 
