@@ -214,7 +214,11 @@ export default {
             width: NODE_WIDTH,
             height: NODE_HEIGHT,
             data: { label: tempRoot.data.label },
-            draggable: true
+            draggable: true,
+            style: {
+              border: '2px dashed #6366f1', // Dotted/dashed border for temp root
+              borderRadius: '8px'
+            }
           })
           existingNodeIds.add(tempRoot.id)
         }
@@ -780,5 +784,10 @@ export default {
 .vue-flow__edge.selected .vue-flow__edge-path {
   stroke: #4f46e5;
   stroke-width: 3;
+}
+
+/* Style for temp root nodes (dotted border) */
+.vue-flow__node[style*="dashed"] {
+  border-style: dashed !important;
 }
 </style>
