@@ -83,23 +83,64 @@ export default {
       const newIndividualNodes = individualNodes.filter(node => !originalExistingNodeIds.has(node.id))
       const existingIndividualNodes = individualNodes.filter(node => originalExistingNodeIds.has(node.id))
 
-      // Step 2: Find root node (node with no incoming edges from new edges)
-      // For layout purposes, we need a root node. If all nodes are existing, we might not have a root.
-      // In that case, we'll use the first new node, or if no new nodes, we'll skip layout
-      let rootNode = newIndividualNodes.find(node => {
-        return !prefixEdges.some(edge => edge.target === node.id)
+      // Step 1.6: Find edges from existing nodes to new nodes and create temp root nodes
+      const tempRootNodes = new Map() // Map: originalSourceId -> tempRootNode
+      const modifiedEdges = [...prefixEdges]
+
+      // Find all unique source nodes that connect to new nodes
+      const sourceNodesToNewNodes = new Set()
+      prefixEdges.forEach(edge => {
+        const sourceIsExisting = originalExistingNodeIds.has(edge.source)
+        const targetIsNew = !originalExistingNodeIds.has(edge.target)
+        if (sourceIsExisting && targetIsNew) {
+          sourceNodesToNewNodes.add(edge.source)
+        }
       })
 
-      // If no root in new nodes, try to find one in all individual nodes (for positioning containers)
-      if (!rootNode) {
-        rootNode = individualNodes.find(node => {
-          return !prefixEdges.some(edge => edge.target === node.id)
+      // Create temp root nodes for each source
+      sourceNodesToNewNodes.forEach(sourceId => {
+        const tempRootId = `${prefix}temp_${sourceId}`
+        const sourceNode = this.nodes.find(n => n.id === sourceId)
+        if (sourceNode) {
+          // Create temp root node as copy of source
+          tempRootNodes.set(sourceId, {
+            id: tempRootId,
+            originalId: sourceId,
+            data: { label: sourceNode.data?.label || sourceId },
+            width: NODE_WIDTH,
+            height: NODE_HEIGHT
+          })
+
+          // Replace edges: change source from original to temp root
+          modifiedEdges.forEach(edge => {
+            if (edge.source === sourceId && !originalExistingNodeIds.has(edge.target)) {
+              edge.source = tempRootId
+            }
+          })
+        }
+      })
+
+      // Add temp root nodes to the nodes list for layout
+      const tempRootNodesList = Array.from(tempRootNodes.values())
+      const allNodesForLayout = [...newIndividualNodes, ...tempRootNodesList]
+
+      // Step 2: Find root node (temp root nodes or node with no incoming edges)
+      // Temp root nodes are the roots of the new subgraph
+      let rootNode = null
+
+      if (tempRootNodesList.length > 0) {
+        // Use first temp root as the root node
+        rootNode = tempRootNodesList[0]
+      } else {
+        // Fallback: find root in new nodes
+        rootNode = allNodesForLayout.find(node => {
+          return !modifiedEdges.some(edge => edge.target === node.id)
         })
       }
 
-      if (!rootNode && newIndividualNodes.length > 0) {
+      if (!rootNode && allNodesForLayout.length > 0) {
         // Use first new node as root if no root found
-        rootNode = newIndividualNodes[0]
+        rootNode = allNodesForLayout[0]
       }
 
       if (!rootNode) {
@@ -107,17 +148,16 @@ export default {
         return
       }
 
-      // Step 3: Layout only NEW individual nodes using Dagre (excluding containers and existing nodes)
-      // But include edges that connect new nodes to existing nodes for proper positioning
-      const individualEdges = prefixEdges.filter(edge => {
-        const sourceIsIndividual = individualNodes.some(n => n.id === edge.source)
-        const targetIsIndividual = individualNodes.some(n => n.id === edge.target)
-        return sourceIsIndividual && targetIsIndividual
+      // Step 3: Layout new nodes (including temp root nodes) using Dagre
+      const individualEdges = modifiedEdges.filter(edge => {
+        const sourceIsInLayout = allNodesForLayout.some(n => n.id === edge.source)
+        const targetIsInLayout = allNodesForLayout.some(n => n.id === edge.target)
+        return sourceIsInLayout && targetIsInLayout
       })
 
-      // Only layout new nodes, but consider all edges (including those to existing nodes)
-      const individualPositions = newIndividualNodes.length > 0
-        ? this.layoutNodesWithDagre(newIndividualNodes, individualEdges)
+      // Layout all new nodes including temp root nodes
+      const individualPositions = allNodesForLayout.length > 0
+        ? this.layoutNodesWithDagre(allNodesForLayout, individualEdges)
         : new Map()
 
       // Add existing node positions to the map (for container positioning)
@@ -153,15 +193,35 @@ export default {
 
       // Step 8: Position success container (right, first child level)
       const successContainerPos = successLayout
-        ? this.positionSuccessContainer(individualPositions, rootNode, successLayout, offset, failureContainerPos, failureLayout, prefixEdges)
+        ? this.positionSuccessContainer(individualPositions, rootNode, successLayout, offset, failureContainerPos, failureLayout, modifiedEdges)
         : null
 
       // Step 9: Build and add nodes to canvas
       const flowNodes = [...this.nodes]
       const flowEdges = [...this.edges]
 
+      // Add temp root nodes first
+      tempRootNodesList.forEach(tempRoot => {
+        const pos = individualPositions.get(tempRoot.id)
+        if (pos) {
+          flowNodes.push({
+            id: tempRoot.id,
+            type: 'custom',
+            position: {
+              x: pos.x + offset.x,
+              y: pos.y + offset.y
+            },
+            width: NODE_WIDTH,
+            height: NODE_HEIGHT,
+            data: { label: tempRoot.data.label },
+            draggable: true
+          })
+          existingNodeIds.add(tempRoot.id)
+        }
+      })
+
       // Add individual nodes with offset (only if they don't already exist)
-      individualNodes.forEach(node => {
+      newIndividualNodes.forEach(node => {
         // Skip if node already exists
         if (existingNodeIds.has(node.id)) {
           return
@@ -171,7 +231,7 @@ export default {
         if (pos) {
           flowNodes.push({
             id: node.id,
-            type: 'default',
+            type: 'custom',
             position: {
               x: pos.x + offset.x,
               y: pos.y + offset.y
@@ -279,9 +339,40 @@ export default {
         })
       }
 
+      // Add edges connecting original source to temp root nodes
+      tempRootNodes.forEach((tempRoot, originalSourceId) => {
+        const edgeId = `edge-${originalSourceId}-${tempRoot.id}`
+        const sourceExists = flowNodes.some(n => n.id === originalSourceId)
+        const targetExists = flowNodes.some(n => n.id === tempRoot.id)
+
+        if (sourceExists && targetExists) {
+          // Update existing source node to use custom type with handles
+          const sourceNodeIndex = flowNodes.findIndex(n => n.id === originalSourceId)
+          if (sourceNodeIndex !== -1 && flowNodes[sourceNodeIndex].type !== 'custom') {
+            flowNodes[sourceNodeIndex].type = 'custom'
+          }
+
+          flowEdges.push({
+            id: edgeId,
+            source: originalSourceId,
+            target: tempRoot.id,
+            type: 'default',
+            animated: false,
+            sourcePosition: 'right',
+            targetPosition: 'left'
+          })
+        }
+      })
+
       // Add edges (filter out edges between container children in same container)
       const addedEdgeIds = new Set(this.edges.map(e => e.id))
-      prefixEdges.forEach(edge => {
+      // Add temp root edges to addedEdgeIds
+      tempRootNodes.forEach((tempRoot, originalSourceId) => {
+        addedEdgeIds.add(`edge-${originalSourceId}-${tempRoot.id}`)
+      })
+
+      // Use modifiedEdges (which have temp root as source) instead of prefixEdges
+      modifiedEdges.forEach(edge => {
         const edgeId = `edge-${edge.source}-${edge.target}`
 
         // Skip if edge already exists
@@ -311,25 +402,24 @@ export default {
           if (!hasExplicitEdge) return
         }
 
-        // Check if source is existing node (from original nodes) and target is new node (not in original)
-        const sourceIsExisting = originalExistingNodeIds.has(edge.source)
-        const targetIsNew = !originalExistingNodeIds.has(edge.target)
-
         const edgeConfig = {
           id: edgeId,
           source: edge.source,
           target: edge.target,
-          type: 'bezier',
+          type: 'default',
           animated: false
         }
 
-        // If existing node connects to new subgraph, use right handle
-        // Note: For handles to work, nodes need explicit handles defined
-        // Using sourcePosition/targetPosition which should work with default nodes
-        if (sourceIsExisting && targetIsNew) {
+        // If source is temp root, use right handle
+        // If target is new node, use top handle
+        const sourceIsTempRoot = tempRootNodesList.some(tr => tr.id === edge.source)
+        const targetIsNew = !originalExistingNodeIds.has(edge.target)
+
+        if (sourceIsTempRoot) {
           edgeConfig.sourcePosition = 'right'
+        }
+        if (targetIsNew) {
           edgeConfig.targetPosition = 'top'
-          console.log('--------------------', edgeConfig)
         }
 
         flowEdges.push(edgeConfig)
