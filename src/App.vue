@@ -42,6 +42,8 @@ export default {
   mounted() {
     this.addSubGraph(initialGraphData)
     this.addSubGraph(initialGraphData)
+    this.addSubGraph(initialGraphData)
+    this.addSubGraph(initialGraphData)
   },
   methods: {
     /**
@@ -114,7 +116,7 @@ export default {
 
       // Step 8: Position success container (right, first child level)
       const successContainerPos = successLayout
-        ? this.positionSuccessContainer(individualPositions, rootNode, successLayout, offset, failureContainerPos)
+        ? this.positionSuccessContainer(individualPositions, rootNode, successLayout, offset, failureContainerPos, failureLayout, prefixEdges)
         : null
 
       // Step 9: Build and add nodes to canvas
@@ -438,29 +440,45 @@ export default {
     /**
      * Position success container to the right, at first child level
      */
-    positionSuccessContainer(individualPositions, rootNode, successLayout, offset, failureContainerPos) {
+    positionSuccessContainer(individualPositions, rootNode, successLayout, offset, failureContainerPos, failureLayout, prefixEdges) {
       const rootPos = individualPositions.get(rootNode.id)
       if (!rootPos) return null
 
-      // Find level 1 nodes (direct children of root)
+      // Find level 1 nodes (direct children of root) by checking edges
+      const level1NodeIds = new Set()
+      prefixEdges.forEach(edge => {
+        if (edge.source === rootNode.id) {
+          level1NodeIds.add(edge.target)
+        }
+      })
+
+      // Find level 1 Y position (should be same for all level 1 nodes)
       const level1Y = rootPos.y + NODE_HEIGHT + this.RANK_GAP
 
-      // Position to the right of the graph
-      const graphRightX = this.getGraphRightX(individualPositions, offset)
-      const successX = graphRightX + this.NODE_GAP
+      // Calculate rightmost X of ALL individual nodes (AFTER offset is applied)
+      // This ensures success container is to the right of the entire graph
+      let graphRightX = (rootPos.x + offset.x) + NODE_WIDTH
 
-      // Check for collision with failure container
-      let finalX = successX
-      if (failureContainerPos) {
-        const failureRightX = failureContainerPos.x
-        // Ensure success is to the right of failure
-        if (successX <= failureRightX) {
-          finalX = failureRightX + this.NODE_GAP
+      individualPositions.forEach((pos, nodeId) => {
+        const absoluteX = pos.x + offset.x
+        graphRightX = Math.max(graphRightX, absoluteX + NODE_WIDTH)
+      })
+
+      // Position success container to the right of the graph's individual nodes
+      let successX = graphRightX + this.NODE_GAP
+
+      // Check for collision with failure container (if in same graph)
+      if (failureContainerPos && failureLayout) {
+        const failureRightX = failureContainerPos.x + failureLayout.size.width
+        // Only adjust if failure is actually to the right of our calculated position
+        // (This shouldn't happen normally since failure is on the left, but just in case)
+        if (failureRightX > successX) {
+          successX = failureRightX + this.NODE_GAP
         }
       }
 
       return {
-        x: finalX + offset.x,
+        x: successX,
         y: level1Y + offset.y
       }
     },
@@ -483,6 +501,26 @@ export default {
       let maxX = -Infinity
       individualPositions.forEach(pos => {
         maxX = Math.max(maxX, pos.x + NODE_WIDTH)
+      })
+      return maxX === -Infinity ? 0 : maxX
+    },
+
+    /**
+     * Get maximum X position of existing nodes at a specific Y level (within tolerance)
+     */
+    getMaxXAtLevel(targetY, tolerance = 100) {
+      if (this.nodes.length === 0) return 0
+
+      let maxX = -Infinity
+      this.nodes.forEach(node => {
+        if (!node.parentNode) {
+          const nodeY = node.position.y
+          // Check if node is at similar Y level (same rank)
+          if (Math.abs(nodeY - targetY) <= tolerance) {
+            const width = node.width || (node.style?.width ? parseInt(node.style.width) : NODE_WIDTH)
+            maxX = Math.max(maxX, node.position.x + width)
+          }
+        }
       })
       return maxX === -Infinity ? 0 : maxX
     },
