@@ -160,6 +160,7 @@ export default {
         })
 
         // Add failure container children
+        // Note: When parentNode is set, positions are relative to parent, not absolute
         failureContainer.childIds.forEach(childId => {
           const childPos = failureLayout.positions.get(childId)
           if (childPos) {
@@ -167,13 +168,13 @@ export default {
               id: childId,
               type: 'default',
               position: {
-                x: failureContainerPos.x + childPos.x,
-                y: failureContainerPos.y + childPos.y
+                x: childPos.x,  // Relative to container (0,0)
+                y: childPos.y   // Relative to container (0,0)
               },
               data: { label: childId.replace(prefix, '') },
               parentNode: failureContainer.id,
               extent: 'parent',
-              draggable: true
+              draggable: false
             })
           }
         })
@@ -200,6 +201,7 @@ export default {
         })
 
         // Add success container children
+        // Note: When parentNode is set, positions are relative to parent, not absolute
         successContainer.childIds.forEach(childId => {
           const childPos = successLayout.positions.get(childId)
           if (childPos) {
@@ -207,13 +209,13 @@ export default {
               id: childId,
               type: 'default',
               position: {
-                x: successContainerPos.x + childPos.x,
-                y: successContainerPos.y + childPos.y
+                x: childPos.x,  // Relative to container (0,0)
+                y: childPos.y   // Relative to container (0,0)
               },
               data: { label: childId.replace(prefix, '') },
               parentNode: successContainer.id,
               extent: 'parent',
-              draggable: true
+              draggable: false
             })
           }
         })
