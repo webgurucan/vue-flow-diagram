@@ -25,10 +25,10 @@ export const initialGraphData =
       { source: 'A', target: 'F' },
       { source: 'F', target: 'G' },
       { source: 'G', target: 'H' },
-      { source: 'H', target: 'L' },
+      { source: 'G', target: 'L' },
       { source: 'A', target: 'I' },
       { source: 'I', target: 'J' },
-      { source: 'J', target: 'K' },
+      { source: 'I', target: 'K' },
     ],
     containers: [
       { id: 'success', childIds: ['C', 'D', 'E'] },

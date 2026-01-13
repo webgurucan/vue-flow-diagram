@@ -14,632 +14,594 @@
   </div>
 </template>
 
-<script setup>
-import { ref, onMounted } from 'vue'
+<script>
 import { VueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import dagre from 'dagre'
 import { NODE_WIDTH, NODE_HEIGHT, initialGraphData } from './data'
 
-const nodes = ref([])
-const edges = ref([])
-
-// Layout constants
-const RANK_GAP = 80  // Vertical gap between ranks (rows) - reduced for tighter spacing
-const NODE_GAP = 50   // Horizontal gap between nodes in same rank (row)
-const CONTAINER_PADDING = 20
-const CONTAINER_CHILD_GAP = 50  // Horizontal gap between children in container
-
-// Layout state - tracks node ordering
-const nodeOrdering = new Map() // nodeId -> { rank, order }
-
-// PHASE 1: Use Dagre for ordering only (not positions)
-function computeOrdering(allNodes, allEdges, containers) {
-  const g = new dagre.graphlib.Graph()
-  g.setDefaultEdgeLabel(() => ({}))
-  g.setGraph({
-    rankdir: 'TB',
-    nodesep: NODE_GAP,  // Use actual node gap
-    ranksep: RANK_GAP   // Use actual rank gap
-  })
-
-  // Add all main nodes (not container children) to Dagre with actual sizes
-  const mainNodeIds = new Set()
-  const nodeSizes = new Map() // Store actual node sizes
-  allNodes.forEach(node => {
-    if (!containers.some(c => c.childIds.includes(node.id))) {
-      mainNodeIds.add(node.id)
-      const width = node.width || NODE_WIDTH
-      const height = node.height || NODE_HEIGHT
-      nodeSizes.set(node.id, { width, height })
-      g.setNode(node.id, { width, height })
+export default {
+  name: 'App',
+  components: {
+    VueFlow,
+    Background,
+    Controls
+  },
+  data() {
+    return {
+      nodes: [],
+      edges: [],
+      graphInstanceCounter: 0,
+      NODE_GAP: 50,
+      RANK_GAP: 80,
+      CONTAINER_PADDING: 20,
+      CONTAINER_CHILD_GAP: 50
     }
-  })
+  },
+  async mounted() {
+    await this.addToGraph(initialGraphData)
+    await this.addToGraph(initialGraphData)
+    await this.addToGraph(initialGraphData)
+  },
+  methods: {
+    /**
+     * Add a graph to the canvas with optional prefix
+     * @param {Object} graphData - { nodes: [], edges: [], containers: [] }
+     * @param {String} prefix - Optional prefix for IDs
+     */
+    async addToGraph(graphData, prefix = null) {
+      // Generate prefix if not provided
+      if (prefix === null) {
+        prefix = `graph_${this.graphInstanceCounter++}_`
+      }
 
-  // Add containers as nodes with estimated sizes
-  const containerSizes = new Map()
-  containers.forEach(container => {
-    // Estimate container size (will be recalculated later)
-    const estimatedWidth = NODE_WIDTH * 2
-    const estimatedHeight = NODE_HEIGHT * 3
-    containerSizes.set(container.id, { width: estimatedWidth, height: estimatedHeight })
-    g.setNode(container.id, { width: estimatedWidth, height: estimatedHeight })
-  })
+      const { nodes: newNodes = [], edges: newEdges = [], containers: newContainers = [] } = graphData
 
-  // Map container children to their containers
-  const childToContainer = new Map()
-  containers.forEach(container => {
-    container.childIds.forEach(childId => {
-      childToContainer.set(childId, container.id)
-    })
-  })
+      // Apply prefix to all IDs
+      const prefixNodes = newNodes.map(node => ({
+        ...node,
+        id: `${prefix}${node.id}`
+      }))
 
-  // Add edges (map container children to their containers)
-  const dagreEdges = []
-  allEdges.forEach(edge => {
-    let source = edge.source
-    let target = edge.target
+      const prefixEdges = newEdges.map(edge => ({
+        source: `${prefix}${edge.source}`,
+        target: `${prefix}${edge.target}`
+      }))
 
-    // If source is a container child, use the container
-    if (childToContainer.has(source)) {
-      source = childToContainer.get(source)
-    }
+      const prefixContainers = newContainers.map(container => ({
+        id: `${prefix}${container.id}`,
+        childIds: container.childIds.map(childId => `${prefix}${childId}`)
+      }))
 
-    // If target is a container child, use the container
-    if (childToContainer.has(target)) {
-      target = childToContainer.get(target)
-    }
+      // Get existing node IDs
+      const existingNodeIds = new Set(this.nodes.map(n => n.id))
+      const existingContainerIds = new Set(
+        this.nodes.filter(n => n.style?.border).map(n => n.id)
+      )
 
-    // Only add edges between main nodes/containers
-    const sourceIsMain = mainNodeIds.has(source) || containers.some(c => c.id === source)
-    const targetIsMain = mainNodeIds.has(target) || containers.some(c => c.id === target)
+      // Filter new items
+      const nodesToAdd = prefixNodes.filter(n => !existingNodeIds.has(n.id))
+      const containersToAdd = prefixContainers.filter(c => !existingContainerIds.has(c.id))
 
-    if (sourceIsMain && targetIsMain && source !== target) {
-      g.setEdge(source, target)
-      dagreEdges.push(`${source} -> ${target}`)
-    }
-  })
-
-  console.log('Dagre Edges:', dagreEdges)
-  dagre.layout(g)
-
-  // Extract ordering (rank and order within rank)
-  // Dagre doesn't always set 'rank' on nodes, so we'll compute it from y coordinates
-  // or use BFS to determine ranks based on graph structure
-  const ordering = new Map()
-  const rankMap = new Map() // rank -> [nodeIds in order]
-
-  // Compute ranks using BFS (more reliable than Dagre's rank property)
-  // Handle disconnected components by running BFS on each component separately
-  const ranks = new Map()
-  const visited = new Set()
-  const allNodeIds = g.nodes()
-
-  // Function to run BFS starting from a root node
-  const bfsFromRoot = (rootId, startRank) => {
-    const queue = [{ id: rootId, rank: startRank }]
-    visited.add(rootId)
-    ranks.set(rootId, startRank)
-
-    let head = 0
-    while (head < queue.length) {
-      const { id: nodeId, rank } = queue[head++]
-
-      // Process outgoing edges
-      g.outEdges(nodeId)?.forEach(edge => {
-        const targetId = edge.w
-        if (!visited.has(targetId)) {
-          visited.add(targetId)
-          const targetRank = rank + 1
-          ranks.set(targetId, targetRank)
-          queue.push({ id: targetId, rank: targetRank })
-        }
+      console.log('Adding graph:', {
+        prefix,
+        nodesToAdd: nodesToAdd.length,
+        containersToAdd: containersToAdd.length
       })
-    }
-  }
 
-  // Find root nodes (nodes with no incoming edges) for each connected component
-  const hasIncoming = new Set()
-  g.edges().forEach(edge => {
-    hasIncoming.add(edge.w)
-  })
-
-  // Process each connected component
-  allNodeIds.forEach(nodeId => {
-    if (!visited.has(nodeId) && !hasIncoming.has(nodeId)) {
-      // This is a root of a new component - start BFS from here
-      bfsFromRoot(nodeId, 0)
-    }
-  })
-
-  // Handle any remaining unvisited nodes (isolated nodes or nodes in cycles)
-  allNodeIds.forEach(nodeId => {
-    if (!visited.has(nodeId)) {
-      // For isolated nodes, assign rank 0
-      ranks.set(nodeId, 0)
-      visited.add(nodeId)
-    }
-  })
-
-  // Group nodes by rank and get order from Dagre
-  g.nodes().forEach(nodeId => {
-    const node = g.node(nodeId)
-    const rank = ranks.get(nodeId) ?? 0
-    const order = node.order ?? 0
-
-    if (!rankMap.has(rank)) {
-      rankMap.set(rank, [])
-    }
-    rankMap.get(rank).push({ id: nodeId, order })
-    ordering.set(nodeId, { rank, order })
-  })
-
-  // Sort nodes within each rank by order
-  rankMap.forEach((nodes, rank) => {
-    nodes.sort((a, b) => a.order - b.order)
-  })
-
-  // Extract Dagre positions
-  const dagrePositions = new Map()
-  g.nodes().forEach(nodeId => {
-    const node = g.node(nodeId)
-    if (node.x !== undefined && node.y !== undefined) {
-      // Dagre positions are centered, convert to top-left
-      const size = nodeSizes.get(nodeId) || containerSizes.get(nodeId) || { width: NODE_WIDTH, height: NODE_HEIGHT }
-      dagrePositions.set(nodeId, {
-        x: node.x - size.width / 2,
-        y: node.y - size.height / 2
+      // Step 1a: Layout individual nodes first (without containers)
+      const individualNodes = nodesToAdd.filter(node => {
+        return !containersToAdd.some(container => container.childIds.includes(node.id))
       })
-    }
-  })
 
-  // Debug: log ranks
-  console.log('Dagre Ranks:', Array.from(rankMap.entries()).map(([rank, nodes]) => ({
-    rank,
-    nodes: nodes.map(n => n.id)
-  })))
+      const individualEdges = prefixEdges.filter(edge => {
+        const sourceIsIndividual = individualNodes.some(n => n.id === edge.source)
+        const targetIsIndividual = individualNodes.some(n => n.id === edge.target)
+        return sourceIsIndividual && targetIsIndividual
+      })
 
-  return { ordering, rankMap, dagrePositions }
-}
+      const individualPositions = this.layoutWithDagre(individualNodes, individualEdges)
 
-// PHASE 2: Container-aware box layout (children vertically to show hierarchy)
-function layoutContainerChildren(container, childNodes, childEdges) {
-  // Place children vertically (top to bottom) to show hierarchy
-  const childPositions = new Map()
-  let currentY = CONTAINER_PADDING
-  let maxWidth = 0
+      // Step 1b: Find root node and level 1 nodes
+      const rootNode = individualNodes.find(node => {
+        return !prefixEdges.some(edge => edge.target === node.id)
+      })
 
-  // Sort children by their order in edges to maintain hierarchy
-  const sortedChildren = [...childNodes]
-  if (childEdges.length > 0) {
-    // Build a proper ordering based on edge flow
-    const childOrder = new Map()
-    const visited = new Set()
+      // Get level 1 nodes (direct children of root)
+      const level1Nodes = individualNodes.filter(node => {
+        return prefixEdges.some(edge => edge.source === rootNode?.id && edge.target === node.id)
+      })
 
-    // Find root nodes (no incoming edges)
-    const rootNodes = childNodes.filter(child =>
-      !childEdges.some(e => e.target === child.id)
-    )
+      // Step 1c: Position containers as level 1 (below root, same row as other level 1 nodes)
+      const containerPositionsFromLayout = new Map()
 
-    // BFS traversal to determine order
-    const queue = [...rootNodes]
-    let order = 0
+      if (rootNode && containersToAdd.length > 0) {
+        // Get root position
+        const rootPos = individualPositions.get(rootNode.id)
+        if (rootPos) {
+          // Get Y position for level 1 (below root)
+          let level1Y = rootPos.y + NODE_HEIGHT + this.RANK_GAP
 
-    while (queue.length > 0) {
-      const current = queue.shift()
-      if (visited.has(current.id)) continue
-
-      visited.add(current.id)
-      childOrder.set(current.id, order++)
-
-      // Add children of current node
-      childEdges
-        .filter(e => e.source === current.id)
-        .forEach(e => {
-          if (!visited.has(e.target)) {
-            queue.push(childNodes.find(n => n.id === e.target))
-          }
-        })
-    }
-
-    // Sort by order
-    sortedChildren.sort((a, b) => {
-      const orderA = childOrder.get(a.id) ?? 999
-      const orderB = childOrder.get(b.id) ?? 999
-      return orderA - orderB
-    })
-  }
-
-  sortedChildren.forEach((child) => {
-    const childWidth = child.width || NODE_WIDTH
-    const childHeight = child.height || NODE_HEIGHT
-
-    childPositions.set(child.id, {
-      x: CONTAINER_PADDING,
-      y: currentY,
-      width: childWidth,
-      height: childHeight,
-    })
-
-    maxWidth = Math.max(maxWidth, childWidth)
-    currentY += childHeight + CONTAINER_CHILD_GAP
-  })
-
-  const containerWidth = maxWidth + (CONTAINER_PADDING * 2)
-  const containerHeight = currentY - CONTAINER_CHILD_GAP + CONTAINER_PADDING
-
-  return { childPositions, size: { width: containerWidth, height: containerHeight } }
-}
-
-// PHASE 2: Layout nodes in ranks (same rank = row, deeper ranks = below)
-function layoutRanks(ordering, rankMap, allNodes, containers, existingNodes, allEdges, dagrePositions) {
-  const nodePositions = new Map()
-  const containerData = new Map()
-
-  // Track existing node positions
-  const existingPositions = new Map()
-  const isExisting = new Set()
-  existingNodes.forEach(node => {
-    if (!node.parentNode) {
-      existingPositions.set(node.id, node.position)
-      isExisting.add(node.id)
-    }
-  })
-
-  // Find max Y from existing nodes to determine starting Y for new ranks
-  let maxExistingY = 0
-  let minExistingX = Infinity
-  let maxExistingX = 0
-  if (existingNodes.length > 0) {
-    const existingYs = Array.from(existingPositions.entries()).map(([nodeId, position]) => {
-      const node = existingNodes.find(n => n.id === nodeId)
-      const height = node?.height || (node?.style?.height ? parseInt(node.style.height) : null) || NODE_HEIGHT
-      const width = node?.width || NODE_WIDTH
-      minExistingX = Math.min(minExistingX, position.x)
-      maxExistingX = Math.max(maxExistingX, position.x + width)
-      return position.y + height
-    })
-    maxExistingY = Math.max(...existingYs, 0)
-  }
-
-  // Calculate offset for new nodes: place them below existing nodes
-  const yOffset = existingNodes.length > 0 && maxExistingY > 0 ? maxExistingY + RANK_GAP : 0
-
-  // Calculate X offset to align with existing nodes (optional - can be 0 to start from left)
-  const xOffset = 0
-
-  // Process each rank (ranks are stacked vertically, rank 0 at top)
-  const ranks = Array.from(rankMap.keys()).sort((a, b) => a - b)
-
-  // Debug: log rank positions
-  console.log('Layout Ranks:', ranks)
-
-  ranks.forEach(rank => {
-    const nodesInRank = rankMap.get(rank)
-    let currentX = 0 // X position for nodes in this rank (horizontal placement)
-    let maxHeightInRank = 0 // Track max height in this rank
-
-    // Find rightmost X of existing nodes in this rank (for incremental placement)
-    if (existingNodes.length > 0) {
-      nodesInRank.forEach(({ id: nodeId }) => {
-        if (isExisting.has(nodeId)) {
-          const existing = existingPositions.get(nodeId)
-          if (existing) {
-            const node = allNodes.find(n => n.id === nodeId)
-            const container = containers.find(c => c.id === nodeId)
-            let width = NODE_WIDTH
-            if (container) {
-              // We'll calculate this in first pass, but for now use a placeholder
-            } else if (node) {
-              width = node.width || NODE_WIDTH
-            }
-            const rightX = existing.x + width
-            if (rightX > currentX) {
-              currentX = rightX + NODE_GAP
+          // Check if there are level 1 nodes to align with
+          if (level1Nodes.length > 0) {
+            const firstLevel1Pos = individualPositions.get(level1Nodes[0].id)
+            if (firstLevel1Pos) {
+              level1Y = firstLevel1Pos.y
             }
           }
-        }
-      })
-    }
 
-    // First pass: calculate container sizes and find max height
-    nodesInRank.forEach(({ id: nodeId }) => {
-      const container = containers.find(c => c.id === nodeId)
-      if (container) {
-        const childNodes = allNodes.filter(n => container.childIds.includes(n.id))
-        const childEdges = allEdges.filter(e =>
+          // Find rightmost level 1 node to position containers to the right
+          let rightmostX = rootPos.x
+          if (level1Nodes.length > 0) {
+            level1Nodes.forEach(node => {
+              const pos = individualPositions.get(node.id)
+              if (pos) {
+                rightmostX = Math.max(rightmostX, pos.x + NODE_WIDTH)
+              }
+            })
+          }
+
+          // Start positioning containers to the right of level 1 nodes
+          let containerX = rightmostX + this.NODE_GAP
+
+          // Place containers horizontally
+          containersToAdd.forEach((container) => {
+            // Use estimated size for initial positioning (will be adjusted later)
+            const estimatedWidth = NODE_WIDTH * 2
+            containerPositionsFromLayout.set(container.id, {
+              x: containerX,
+              y: level1Y
+            })
+            // Move X for next container
+            containerX += estimatedWidth + this.NODE_GAP
+          })
+        }
+      }
+
+      // Step 2: Layout container children using Dagre to get actual container sizes
+      const containerChildrenPositions = new Map()
+      const containerSizes = new Map()
+
+      for (const container of containersToAdd) {
+        const childNodes = nodesToAdd.filter(n => container.childIds.includes(n.id))
+        const childEdges = prefixEdges.filter(e =>
           container.childIds.includes(e.source) && container.childIds.includes(e.target)
         )
-        const containerLayout = layoutContainerChildren(container, childNodes, childEdges)
-        containerData.set(container.id, containerLayout)
-        maxHeightInRank = Math.max(maxHeightInRank, containerLayout.size.height)
 
-        // Update currentX if this is an existing container
-        if (isExisting.has(container.id)) {
-          const existing = existingPositions.get(container.id)
-          if (existing) {
-            const rightX = existing.x + containerLayout.size.width
-            if (rightX > currentX) {
-              currentX = rightX + NODE_GAP
-            }
-          }
-        }
-      } else {
-        const node = allNodes.find(n => n.id === nodeId)
-        if (node) {
-          maxHeightInRank = Math.max(maxHeightInRank, node.height || NODE_HEIGHT)
+        if (childNodes.length > 0) {
+          const childrenLayout = this.layoutContainerChildrenWithDagre(childNodes, childEdges)
+          containerChildrenPositions.set(container.id, childrenLayout.positions)
+          containerSizes.set(container.id, childrenLayout.size)
         }
       }
-    })
 
-    // Second pass: place nodes using Dagre positions (for new nodes) or preserve existing positions
-    nodesInRank.forEach(({ id: nodeId }) => {
-      const container = containers.find(c => c.id === nodeId)
+      // Step 3: Calculate offset to place graph in free space (using actual container sizes)
+      const offset = this.calculateGraphOffset(individualPositions, containerPositionsFromLayout, containerSizes)
 
-      if (container) {
-        const containerLayout = containerData.get(container.id)
-
-        if (isExisting.has(container.id)) {
-          // Preserve existing position
-          const existing = existingPositions.get(container.id)
-          nodePositions.set(container.id, existing)
-        } else {
-          // New container - use Dagre position if available, otherwise use calculated position
-          const dagrePos = dagrePositions.get(container.id)
-          if (dagrePos) {
-            // Use Dagre position with offset for new nodes
-            nodePositions.set(container.id, {
-              x: dagrePos.x + xOffset,
-              y: dagrePos.y + yOffset
-            })
-            console.log(`Placed container ${container.id} using Dagre at (${dagrePos.x + xOffset}, ${dagrePos.y + yOffset})`)
-          } else {
-            // Fallback to calculated position
-            const x = currentX
-            const y = currentRankY
-            nodePositions.set(container.id, { x, y })
-            console.log(`Placed container ${container.id} at rank ${rank}, position (${x}, ${y})`)
-            currentX += containerLayout.size.width + NODE_GAP
-          }
-        }
-      } else {
-        // Regular node
-        const node = allNodes.find(n => n.id === nodeId)
-        if (node) {
-          if (isExisting.has(nodeId) && existingNodes.length > 0) {
-            // Preserve existing position
-            const existing = existingPositions.get(nodeId)
-            nodePositions.set(nodeId, existing)
-          } else {
-            // New node - use Dagre position if available
-            const dagrePos = dagrePositions.get(nodeId)
-            if (dagrePos) {
-              // Use Dagre position with offset for new nodes
-              nodePositions.set(nodeId, {
-                x: dagrePos.x + xOffset,
-                y: dagrePos.y + yOffset
-              })
-              console.log(`Placed node ${nodeId} using Dagre at (${dagrePos.x + xOffset}, ${dagrePos.y + yOffset})`)
-            } else {
-              // Fallback to calculated position
-              const nodeWidth = node.width || NODE_WIDTH
-              const x = currentX
-              const y = currentRankY
-              nodePositions.set(nodeId, { x, y })
-              console.log(`Placed node ${nodeId} at rank ${rank}, position (${x}, ${y})`)
-              currentX += nodeWidth + NODE_GAP
-            }
-          }
-        }
-      }
-    })
-  })
-
-  return { nodePositions, containerData }
-}
-
-// Global counter for auto-generating unique prefixes
-let graphInstanceCounter = 0
-
-// PHASE 3: Incremental insertion
-async function addToGraph({ nodes: newNodes = [], edges: newEdges = [], containers: newContainers = [] }, prefix = null) {
-  // Generate prefix if not provided
-  if (prefix === null) {
-    prefix = `graph_${graphInstanceCounter++}_`
-  }
-
-  // Apply prefix to all IDs
-  const prefixNodes = newNodes.map(node => ({
-    ...node,
-    id: `${prefix}${node.id}`
-  }))
-
-  const prefixEdges = newEdges.map(edge => ({
-    ...edge,
-    source: `${prefix}${edge.source}`,
-    target: `${prefix}${edge.target}`
-  }))
-
-  const prefixContainers = newContainers.map(container => ({
-    ...container,
-    id: `${prefix}${container.id}`,
-    childIds: container.childIds.map(childId => `${prefix}${childId}`)
-  }))
-
-  // Get existing data
-  const existingNodeIds = new Set(nodes.value.map(n => n.id))
-  const existingContainerIds = new Set(
-    nodes.value.filter(n => n.style?.border).map(n => n.id)
-  )
-
-  // Filter new items (now using prefixed IDs)
-  const nodesToAdd = prefixNodes.filter(n => !existingNodeIds.has(n.id))
-  const containersToAdd = prefixContainers.filter(c => !existingContainerIds.has(c.id))
-
-  console.log('addToGraph called:', {
-    prefix,
-    newNodes: newNodes.length,
-    nodesToAdd: nodesToAdd.length,
-    newContainers: newContainers.length,
-    containersToAdd: containersToAdd.length,
-    existingNodes: nodes.value.length
-  })
-
-  // Build complete lists
-  const allNodes = [
-    ...nodes.value.filter(n => !n.parentNode).map(n => ({
-      id: n.id,
-      width: n.width || NODE_WIDTH,
-      height: n.height || NODE_HEIGHT,
-    })),
-    ...nodesToAdd,
-  ]
-
-  const allContainers = [
-    ...nodes.value
-      .filter(n => n.style?.border)
-      .map(n => {
-        const childIds = nodes.value
-          .filter(child => child.parentNode === n.id)
-          .map(child => child.id)
-        return { id: n.id, childIds }
-      }),
-    ...containersToAdd,
-  ]
-
-  const allEdges = [...edges.value, ...prefixEdges]
-
-  // PHASE 1: Compute ordering with Dagre
-  const { ordering, rankMap, dagrePositions } = computeOrdering(allNodes, allEdges, allContainers)
-
-  console.log('After computeOrdering:', {
-    allNodesCount: allNodes.length,
-    rankMapSize: rankMap.size,
-    rankMapEntries: Array.from(rankMap.entries()).map(([rank, nodes]) => ({
-      rank,
-      nodeIds: nodes.map(n => n.id)
-    }))
-  })
-
-  // PHASE 2: Layout with container awareness
-  const { nodePositions, containerData } = layoutRanks(
-    ordering,
-    rankMap,
-    allNodes,
-    allContainers,
-    nodes.value,
-    allEdges,
-    dagrePositions
-  )
-
-  console.log('After layoutRanks:', {
-    nodePositionsSize: nodePositions.size,
-    nodePositions: Array.from(nodePositions.entries()).map(([id, pos]) => ({ id, pos }))
-  })
-
-  // Start with existing nodes and edges (keep them as-is)
-  const flowNodes = [...nodes.value]
-  const flowEdges = [...edges.value]
-
-  // Track which nodes we've already added to avoid duplicates
-  const addedNodeIds = new Set(flowNodes.map(n => n.id))
-  const addedEdgeIds = new Set(flowEdges.map(e => e.id))
-
-  // Track container IDs to identify them
-  const containerIds = new Set(allContainers.map(c => c.id))
-
-  // Add only NEW regular nodes (not containers, not container children)
-  nodesToAdd.forEach(node => {
-    const pos = nodePositions.get(node.id)
-    const isContainerChild = allContainers.some(c => c.childIds.includes(node.id))
-    const isContainer = containerIds.has(node.id)
-
-    if (pos && !isContainerChild && !isContainer && !addedNodeIds.has(node.id)) {
-      flowNodes.push({
-        id: node.id,
-        type: 'default',
-        position: pos,
-        width: node.width || NODE_WIDTH,
-        height: node.height || NODE_HEIGHT,
-        data: { label: node.id },
-        draggable: true,
+      // Step 4: Apply offset to all positions
+      const offsetIndividualPositions = new Map()
+      individualPositions.forEach((pos, nodeId) => {
+        offsetIndividualPositions.set(nodeId, {
+          x: pos.x + offset.x,
+          y: pos.y + offset.y
+        })
       })
-      addedNodeIds.add(node.id)
-    }
-  })
 
-  // Add only NEW containers and their children
-  containersToAdd.forEach(container => {
-    const pos = nodePositions.get(container.id)
-    const layout = containerData.get(container.id)
+      // Update container positions with offset and check for collisions
+      const finalContainerPositions = new Map()
+      containerPositionsFromLayout.forEach((pos, containerId) => {
+        const size = containerSizes.get(containerId)
+        if (size) {
+          // Apply offset (positions are already top-left)
+          let finalPos = {
+            x: pos.x + offset.x,
+            y: pos.y + offset.y
+          }
 
-    if (pos && layout && !addedNodeIds.has(container.id)) {
-      // Container node
-      flowNodes.push({
-        id: container.id,
-        type: 'default',
-        position: pos,
-        width: layout.size.width,
-        height: layout.size.height,
-        style: {
-          width: `${layout.size.width}px`,
-          height: `${layout.size.height}px`,
-          border: '2px solid #6366f1',
-          borderRadius: '8px',
-          background: 'rgba(99, 102, 241, 0.1)',
-        },
-        data: { label: container.id },
-        selectable: true,
-        draggable: true,
+          // Check for collisions with individual nodes and adjust
+          const collision = this.checkCollision(
+            finalPos.x,
+            finalPos.y,
+            size.width,
+            size.height,
+            containerId,
+            offsetIndividualPositions,
+            individualNodes
+          )
+
+          if (collision.collides && collision.adjustX) {
+            finalPos.x = Math.max(finalPos.x, collision.adjustX)
+          }
+
+          finalContainerPositions.set(containerId, finalPos)
+        }
       })
-      addedNodeIds.add(container.id)
 
-      // Container children
-      container.childIds.forEach(childId => {
-        const childPos = layout.childPositions.get(childId)
-        if (childPos && !addedNodeIds.has(childId)) {
+      // Step 4: Build flow nodes and edges
+      const flowNodes = [...this.nodes]
+      const flowEdges = [...this.edges]
+
+      // Add individual nodes
+      individualNodes.forEach(node => {
+        const pos = offsetIndividualPositions.get(node.id)
+        if (pos) {
           flowNodes.push({
-            id: childId,
+            id: node.id,
             type: 'default',
-            position: { x: childPos.x, y: childPos.y },
-            data: { label: childId },
-            parentNode: container.id,
-            extent: 'parent',
-            draggable: false,
+            position: pos,
+            width: node.width || NODE_WIDTH,
+            height: node.height || NODE_HEIGHT,
+            data: { label: node.id },
+            draggable: true
           })
-          addedNodeIds.add(childId)
         }
       })
-    }
-  })
 
-  // Add only NEW edges
-  prefixEdges.forEach((edge, idx) => {
-    const edgeId = `edge-${edge.source}-${edge.target}`
-    if (!addedEdgeIds.has(edgeId)) {
-      flowEdges.push({
-        id: edgeId,
-        source: edge.source,
-        target: edge.target,
-        type: 'bezier',
-        animated: false,
+      // Add containers and their children
+      for (const container of containersToAdd) {
+        const containerPos = finalContainerPositions.get(container.id)
+        const containerSize = containerSizes.get(container.id)
+        const childrenPositions = containerChildrenPositions.get(container.id)
+
+        if (containerPos && containerSize) {
+          // Add container node
+          flowNodes.push({
+            id: container.id,
+            type: 'default',
+            position: containerPos,
+            width: containerSize.width,
+            height: containerSize.height,
+            style: {
+              width: `${containerSize.width}px`,
+              height: `${containerSize.height}px`,
+              border: '2px solid #6366f1',
+              borderRadius: '8px',
+              background: 'rgba(99, 102, 241, 0.1)'
+            },
+            data: { label: container.id },
+            selectable: true,
+            draggable: true
+          })
+
+          // Add container children
+          if (childrenPositions) {
+            container.childIds.forEach(childId => {
+              const childPos = childrenPositions.get(childId)
+              if (childPos) {
+                flowNodes.push({
+                  id: childId,
+                  type: 'default',
+                  position: { x: childPos.x, y: childPos.y },
+                  data: { label: childId },
+                  parentNode: container.id,
+                  extent: 'parent',
+                  draggable: true
+                })
+              }
+            })
+          }
+        }
+      }
+
+      // Add edges (filter out edges between container children in same container)
+      const addedEdgeIds = new Set(this.edges.map(e => e.id))
+      prefixEdges.forEach(edge => {
+        const edgeId = `edge-${edge.source}-${edge.target}`
+
+        // Check if both nodes exist
+        const sourceExists = flowNodes.some(n => n.id === edge.source)
+        const targetExists = flowNodes.some(n => n.id === edge.target)
+
+        if (!sourceExists || !targetExists) return
+
+        // Filter edges between container children in same container
+        const sourceNode = flowNodes.find(n => n.id === edge.source)
+        const targetNode = flowNodes.find(n => n.id === edge.target)
+
+        if (sourceNode?.parentNode && targetNode?.parentNode &&
+            sourceNode.parentNode === targetNode.parentNode) {
+          // Both are in same container - check if explicit edge exists
+          const originalSource = edge.source.replace(prefix, '')
+          const originalTarget = edge.target.replace(prefix, '')
+          const hasExplicitEdge = newEdges.some(e =>
+            e.source === originalSource && e.target === originalTarget
+          )
+          if (!hasExplicitEdge) {
+            console.log(`Filtering edge ${edge.source}->${edge.target}: same container children`)
+            return
+          }
+        }
+
+        if (!addedEdgeIds.has(edgeId)) {
+          flowEdges.push({
+            id: edgeId,
+            source: edge.source,
+            target: edge.target,
+            type: 'bezier',
+            animated: false
+          })
+          addedEdgeIds.add(edgeId)
+        }
       })
-      addedEdgeIds.add(edgeId)
+
+      // Log all edges
+      console.log('=== ALL EDGES ===')
+      flowEdges.forEach(edge => {
+        console.log(`  ${edge.source} -> ${edge.target}`)
+      })
+
+      this.nodes = flowNodes
+      this.edges = flowEdges
+    },
+
+    /**
+     * Layout nodes using Dagre algorithm (positions calculated independently, starting from 0,0)
+     */
+    layoutWithDagre(nodes, edges, includeContainers = false) {
+      if (nodes.length === 0) return new Map()
+
+      const g = new dagre.graphlib.Graph()
+      g.setDefaultEdgeLabel(() => ({}))
+      g.setGraph({
+        rankdir: 'TB',
+        nodesep: this.NODE_GAP,
+        ranksep: this.RANK_GAP
+      })
+
+      // Add nodes to Dagre
+      nodes.forEach(node => {
+        g.setNode(node.id, {
+          width: node.width || NODE_WIDTH,
+          height: node.height || NODE_HEIGHT
+        })
+      })
+
+      // Add edges to Dagre
+      edges.forEach(edge => {
+        g.setEdge(edge.source, edge.target)
+      })
+
+      // Run layout
+      dagre.layout(g)
+
+      // Extract positions (independent, starting from 0,0)
+      const positions = new Map()
+
+      g.nodes().forEach(nodeId => {
+        const node = g.node(nodeId)
+        if (node.x !== undefined && node.y !== undefined) {
+          const nodeData = nodes.find(n => n.id === nodeId)
+          const width = nodeData?.width || NODE_WIDTH
+          const height = nodeData?.height || NODE_HEIGHT
+
+          // Positions are calculated independently (Dagre gives center coordinates)
+          positions.set(nodeId, {
+            x: node.x - width / 2,
+            y: node.y - height / 2
+          })
+        }
+      })
+
+      return positions
+    },
+
+    /**
+     * Layout container children using Dagre
+     */
+    layoutContainerChildrenWithDagre(childNodes, childEdges) {
+      if (childNodes.length === 0) {
+        return { positions: new Map(), size: { width: NODE_WIDTH, height: NODE_HEIGHT } }
+      }
+
+      const g = new dagre.graphlib.Graph()
+      g.setDefaultEdgeLabel(() => ({}))
+      g.setGraph({
+        rankdir: 'TB',
+        nodesep: this.CONTAINER_CHILD_GAP,
+        ranksep: this.CONTAINER_CHILD_GAP
+      })
+
+      // Add nodes
+      childNodes.forEach(node => {
+        g.setNode(node.id, {
+          width: node.width || NODE_WIDTH,
+          height: node.height || NODE_HEIGHT
+        })
+      })
+
+      // Add edges
+      childEdges.forEach(edge => {
+        g.setEdge(edge.source, edge.target)
+      })
+
+      // Run layout
+      dagre.layout(g)
+
+      // Extract positions
+      const positions = new Map()
+      let minX = Infinity
+      let maxX = -Infinity
+      let minY = Infinity
+      let maxY = -Infinity
+
+      g.nodes().forEach(nodeId => {
+        const node = g.node(nodeId)
+        if (node.x !== undefined && node.y !== undefined) {
+          const nodeData = childNodes.find(n => n.id === nodeId)
+          const width = nodeData?.width || NODE_WIDTH
+          const height = nodeData?.height || NODE_HEIGHT
+
+          const x = node.x - width / 2
+          const y = node.y - height / 2
+
+          positions.set(nodeId, { x, y })
+
+          minX = Math.min(minX, x)
+          maxX = Math.max(maxX, x + width)
+          minY = Math.min(minY, y)
+          maxY = Math.max(maxY, y + height)
+        }
+      })
+
+      // Calculate container size with padding
+      const width = maxX - minX + (this.CONTAINER_PADDING * 2)
+      const height = maxY - minY + (this.CONTAINER_PADDING * 2)
+
+      // Adjust positions to account for padding
+      const adjustedPositions = new Map()
+      positions.forEach((pos, nodeId) => {
+        adjustedPositions.set(nodeId, {
+          x: pos.x - minX + this.CONTAINER_PADDING,
+          y: pos.y - minY + this.CONTAINER_PADDING
+        })
+      })
+
+      return {
+        positions: adjustedPositions,
+        size: { width, height }
+      }
+    },
+
+    /**
+     * Calculate offset to place new graph in free space
+     */
+    calculateGraphOffset(individualPositions, containerPositions, containerSizes) {
+      // Find bounds of new graph (before offset)
+      let minX = Infinity
+      let minY = Infinity
+      let maxX = -Infinity
+      let maxY = -Infinity
+
+      // Check individual nodes
+      individualPositions.forEach((pos, nodeId) => {
+        const width = NODE_WIDTH
+        const height = NODE_HEIGHT
+        minX = Math.min(minX, pos.x)
+        minY = Math.min(minY, pos.y)
+        maxX = Math.max(maxX, pos.x + width)
+        maxY = Math.max(maxY, pos.y + height)
+      })
+
+      // Check containers (using actual sizes)
+      containerPositions.forEach((pos, containerId) => {
+        const size = containerSizes.get(containerId) || { width: NODE_WIDTH * 2, height: NODE_HEIGHT * 2 }
+        // pos is center position from Dagre
+        const leftX = pos.x - size.width / 2
+        const topY = pos.y - size.height / 2
+        minX = Math.min(minX, leftX)
+        minY = Math.min(minY, topY)
+        maxX = Math.max(maxX, leftX + size.width)
+        maxY = Math.max(maxY, topY + size.height)
+      })
+
+      // Get bounds of existing nodes
+      const existingMaxY = this.getMaxY()
+
+      // Calculate offset: place new graph below existing nodes
+      const offsetX = 0 // Keep X alignment
+      const offsetY = existingMaxY > 0 ? existingMaxY + this.RANK_GAP - minY : (minY < 0 ? -minY : 0)
+
+      return { x: offsetX, y: offsetY }
+    },
+
+    /**
+     * Get maximum Y position of existing nodes
+     */
+    getMaxY() {
+      if (this.nodes.length === 0) return 0
+
+      let maxY = 0
+      this.nodes.forEach(node => {
+        if (!node.parentNode) {
+          const height = node.height || (node.style?.height ? parseInt(node.style.height) : NODE_HEIGHT)
+          maxY = Math.max(maxY, node.position.y + height)
+        }
+      })
+      return maxY
+    },
+
+    /**
+     * Get minimum X position of existing nodes
+     */
+    getMinX() {
+      if (this.nodes.length === 0) return 0
+
+      let minX = Infinity
+      this.nodes.forEach(node => {
+        if (!node.parentNode) {
+          minX = Math.min(minX, node.position.x)
+        }
+      })
+      return minX === Infinity ? 0 : minX
+    },
+
+    /**
+     * Get maximum X position of existing nodes
+     */
+    getMaxX() {
+      if (this.nodes.length === 0) return 0
+
+      let maxX = -Infinity
+      this.nodes.forEach(node => {
+        if (!node.parentNode) {
+          const width = node.width || (node.style?.width ? parseInt(node.style.width) : NODE_WIDTH)
+          maxX = Math.max(maxX, node.position.x + width)
+        }
+      })
+      return maxX === -Infinity ? 0 : maxX
+    },
+
+    /**
+     * Check for collisions between a position and existing nodes
+     */
+    checkCollision(x, y, width, height, excludeId, individualPositions, individualNodes) {
+      const padding = 10
+      let maxAdjustX = 0
+
+      // Check against individual nodes
+      individualPositions.forEach((pos, nodeId) => {
+        if (nodeId === excludeId) return
+
+        const node = individualNodes.find(n => n.id === nodeId)
+        const nodeWidth = node?.width || NODE_WIDTH
+        const nodeHeight = node?.height || NODE_HEIGHT
+
+        // Check for overlap
+        if (!(x + width + padding < pos.x ||
+              x > pos.x + nodeWidth + padding ||
+              y + height + padding < pos.y ||
+              y > pos.y + nodeHeight + padding)) {
+          const adjustX = pos.x + nodeWidth + this.NODE_GAP
+          maxAdjustX = Math.max(maxAdjustX, adjustX)
+        }
+      })
+
+      // Check against existing nodes on canvas
+      this.nodes.forEach(node => {
+        if (node.id === excludeId || node.parentNode) return
+
+        const nodeWidth = node.width || (node.style?.width ? parseInt(node.style.width) : NODE_WIDTH)
+        const nodeHeight = node.height || (node.style?.height ? parseInt(node.style.height) : NODE_HEIGHT)
+        const nodePos = node.position
+
+        // Check for overlap
+        if (!(x + width + padding < nodePos.x ||
+              x > nodePos.x + nodeWidth + padding ||
+              y + height + padding < nodePos.y ||
+              y > nodePos.y + nodeHeight + padding)) {
+          const adjustX = nodePos.x + nodeWidth + this.NODE_GAP
+          maxAdjustX = Math.max(maxAdjustX, adjustX)
+        }
+      })
+
+      if (maxAdjustX > 0) {
+        return { collides: true, adjustX: maxAdjustX }
+      }
+      return { collides: false }
     }
-  })
-
-  console.log('Final flowNodes:', flowNodes.length, 'flowEdges:', flowEdges.length)
-  console.log('Flow node IDs:', flowNodes.map(n => n.id))
-
-  nodes.value = flowNodes
-  edges.value = flowEdges
+  }
 }
-
-// Start with simple graph
-onMounted(async () => {
-  await addToGraph(initialGraphData)
-})
 </script>
 
 <style>
