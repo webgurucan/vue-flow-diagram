@@ -41,6 +41,7 @@ export default {
   },
   mounted() {
     this.addSubGraph(initialGraphData)
+    this.addSubGraph(initialGraphData)
   },
   methods: {
     /**

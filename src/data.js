@@ -16,6 +16,8 @@ export const initialGraphData =
       { id: 'J', width: NODE_WIDTH, height: NODE_HEIGHT },
       { id: 'K', width: NODE_WIDTH, height: NODE_HEIGHT },
       { id: 'L', width: NODE_WIDTH, height: NODE_HEIGHT },
+      { id: 'M', width: NODE_WIDTH, height: NODE_HEIGHT },
+      { id: 'N', width: NODE_WIDTH, height: NODE_HEIGHT },
     ],
     edges: [
       { source: 'A', target: 'B' },
@@ -29,6 +31,8 @@ export const initialGraphData =
       { source: 'A', target: 'I' },
       { source: 'I', target: 'J' },
       { source: 'I', target: 'K' },
+      { source: 'I', target: 'M' },
+      { source: 'I', target: 'N' },
     ],
     containers: [
       { id: 'success', childIds: ['C', 'D', 'E'] },
