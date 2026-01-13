@@ -359,7 +359,12 @@ export default {
             type: 'default',
             animated: false,
             sourcePosition: 'right',
-            targetPosition: 'left'
+            targetPosition: 'left',
+            style: {
+              stroke: '#9ca3af', // Gray color for root-to-temp-root edge
+              strokeWidth: 2,
+              strokeDasharray: '5,5' // Dotted/dashed style
+            }
           })
         }
       })
