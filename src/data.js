@@ -39,3 +39,88 @@ export const initialGraphData =
       { id: 'failure', childIds: ['F', 'G', 'H', 'L'] },
     ],
   }
+
+export const secondGraphData =
+{
+  nodes: [
+    { id: '2nd_A', width: NODE_WIDTH, height: NODE_HEIGHT },
+    { id: '2nd_B', width: NODE_WIDTH, height: NODE_HEIGHT },
+    { id: '2nd_C', width: NODE_WIDTH, height: NODE_HEIGHT },
+    { id: '2nd_D', width: NODE_WIDTH, height: NODE_HEIGHT },
+    { id: '2nd_E', width: NODE_WIDTH, height: NODE_HEIGHT },
+    { id: '2nd_F', width: NODE_WIDTH, height: NODE_HEIGHT },
+    { id: '2nd_G', width: NODE_WIDTH, height: NODE_HEIGHT },
+    { id: '2nd_H', width: NODE_WIDTH, height: NODE_HEIGHT },
+    { id: '2nd_I', width: NODE_WIDTH, height: NODE_HEIGHT },
+    { id: '2nd_J', width: NODE_WIDTH, height: NODE_HEIGHT },
+    { id: '2nd_K', width: NODE_WIDTH, height: NODE_HEIGHT },
+    { id: '2nd_L', width: NODE_WIDTH, height: NODE_HEIGHT },
+    { id: '2nd_M', width: NODE_WIDTH, height: NODE_HEIGHT },
+    { id: '2nd_N', width: NODE_WIDTH, height: NODE_HEIGHT },
+    { id: '2nd_O', width: NODE_WIDTH, height: NODE_HEIGHT },
+    { id: '2nd_P', width: NODE_WIDTH, height: NODE_HEIGHT },
+  ],
+  edges: [
+    { source: 'D', target: '2nd_A' },
+    { source: 'D', target: '2nd_B' },
+    { source: 'D', target: '2nd_I' },
+    { source: 'D', target: '2nd_F' },
+    { source: 'D', target: '2nd_C' },
+    { source: '2nd_F', target: '2nd_G' },
+    { source: '2nd_G', target: '2nd_H' },
+    { source: '2nd_G', target: '2nd_L' },
+    { source: '2nd_C', target: '2nd_D' },
+    { source: '2nd_D', target: '2nd_E' },
+    { source: '2nd_I', target: '2nd_J' },
+    { source: '2nd_I', target: '2nd_K' },
+    { source: '2nd_I', target: '2nd_M' },
+    { source: '2nd_I', target: '2nd_N' },
+    { source: '2nd_H', target: '2nd_O' },
+    { source: '2nd_O', target: '2nd_P' },
+  ],
+  containers: [
+    { id: 'success', childIds: ['2nd_C', '2nd_D', '2nd_E'] },
+    { id: 'failure', childIds: ['2nd_F', '2nd_G', '2nd_H', '2nd_L', '2nd_O', '2nd_P'] },
+  ],
+}
+
+
+export const thirdGraphData =
+{
+  nodes: [
+    { id: '3rd_A', width: NODE_WIDTH, height: NODE_HEIGHT },
+    { id: '3rd_B', width: NODE_WIDTH, height: NODE_HEIGHT },
+    { id: '3rd_C', width: NODE_WIDTH, height: NODE_HEIGHT },
+    { id: '3rd_D', width: NODE_WIDTH, height: NODE_HEIGHT },
+    { id: '3rd_E', width: NODE_WIDTH, height: NODE_HEIGHT },
+    { id: '3rd_F', width: NODE_WIDTH, height: NODE_HEIGHT },
+    { id: '3rd_G', width: NODE_WIDTH, height: NODE_HEIGHT },
+    { id: '3rd_H', width: NODE_WIDTH, height: NODE_HEIGHT },
+    { id: '3rd_I', width: NODE_WIDTH, height: NODE_HEIGHT },
+    { id: '3rd_J', width: NODE_WIDTH, height: NODE_HEIGHT },
+    { id: '3rd_K', width: NODE_WIDTH, height: NODE_HEIGHT },
+    { id: '3rd_L', width: NODE_WIDTH, height: NODE_HEIGHT },
+    { id: '3rd_M', width: NODE_WIDTH, height: NODE_HEIGHT },
+    { id: '3rd_N', width: NODE_WIDTH, height: NODE_HEIGHT },
+  ],
+  edges: [
+    { source: 'K', target: '3rd_A' },
+    { source: 'K', target: '3rd_B' },
+    { source: 'K', target: '3rd_I' },
+    { source: 'K', target: '3rd_F' },
+    { source: 'K', target: '3rd_C' },
+    { source: '3rd_F', target: '3rd_G' },
+    { source: '3rd_G', target: '3rd_H' },
+    { source: '3rd_G', target: '3rd_L' },
+    { source: '3rd_C', target: '3rd_D' },
+    { source: '3rd_D', target: '3rd_E' },
+    { source: '3rd_I', target: '3rd_J' },
+    { source: '3rd_I', target: '3rd_K' },
+    { source: '3rd_I', target: '3rd_M' },
+    { source: '3rd_I', target: '3rd_N' },
+  ],
+  containers: [
+    { id: 'success', childIds: ['3rd_C', '3rd_D', '3rd_E'] },
+    { id: 'failure', childIds: ['3rd_F', '3rd_G', '3rd_H', '3rd_L'] },
+  ],
+}

@@ -19,7 +19,7 @@ import { VueFlow } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import dagre from 'dagre'
-import { NODE_WIDTH, NODE_HEIGHT, initialGraphData } from './data'
+import { NODE_WIDTH, NODE_HEIGHT, initialGraphData, secondGraphData, thirdGraphData } from './data'
 
 export default {
   name: 'App',
@@ -41,9 +41,8 @@ export default {
   },
   mounted() {
     this.addSubGraph(initialGraphData)
-    this.addSubGraph(initialGraphData)
-    this.addSubGraph(initialGraphData)
-    this.addSubGraph(initialGraphData)
+    this.addSubGraph(secondGraphData)
+    this.addSubGraph(thirdGraphData)
   },
   methods: {
     /**
@@ -54,20 +53,22 @@ export default {
       const prefix = `subgraph_${this.subGraphCounter++}_`
       const { nodes: newNodes = [], edges: newEdges = [], containers: newContainers = [] } = graphData
 
-      // Apply prefix to all IDs
+      // Keep individual node IDs unchanged (no prefix)
       const prefixNodes = newNodes.map(node => ({
         ...node,
-        id: `${prefix}${node.id}`
+        id: node.id // Keep original ID
       }))
 
+      // Edges: keep original IDs (they may connect to existing nodes)
       const prefixEdges = newEdges.map(edge => ({
-        source: `${prefix}${edge.source}`,
-        target: `${prefix}${edge.target}`
+        source: edge.source, // Keep original ID (may be existing node)
+        target: edge.target  // Keep original ID (may be existing node)
       }))
 
+      // Containers: add prefix for unique IDs
       const prefixContainers = newContainers.map(container => ({
-        id: `${prefix}${container.id}`,
-        childIds: container.childIds.map(childId => `${prefix}${childId}`)
+        id: `${prefix}${container.id}`, // Add prefix to container ID
+        childIds: container.childIds.map(childId => childId) // Keep child IDs unchanged
       }))
 
       // Step 1: Find individual nodes (not in containers)
@@ -75,35 +76,71 @@ export default {
         return !prefixContainers.some(container => container.childIds.includes(node.id))
       })
 
-      // Step 2: Find root node (node with no incoming edges)
-      const rootNode = individualNodes.find(node => {
+      // Step 1.5: Separate new nodes from existing nodes
+      // Store original existing node IDs (before adding new nodes)
+      const originalExistingNodeIds = new Set(this.nodes.map(n => n.id))
+      const existingNodeIds = new Set(this.nodes.map(n => n.id)) // This will be modified as we add nodes
+      const newIndividualNodes = individualNodes.filter(node => !originalExistingNodeIds.has(node.id))
+      const existingIndividualNodes = individualNodes.filter(node => originalExistingNodeIds.has(node.id))
+
+      // Step 2: Find root node (node with no incoming edges from new edges)
+      // For layout purposes, we need a root node. If all nodes are existing, we might not have a root.
+      // In that case, we'll use the first new node, or if no new nodes, we'll skip layout
+      let rootNode = newIndividualNodes.find(node => {
         return !prefixEdges.some(edge => edge.target === node.id)
       })
+
+      // If no root in new nodes, try to find one in all individual nodes (for positioning containers)
+      if (!rootNode) {
+        rootNode = individualNodes.find(node => {
+          return !prefixEdges.some(edge => edge.target === node.id)
+        })
+      }
+
+      if (!rootNode && newIndividualNodes.length > 0) {
+        // Use first new node as root if no root found
+        rootNode = newIndividualNodes[0]
+      }
 
       if (!rootNode) {
         console.error('No root node found')
         return
       }
 
-      // Step 3: Layout individual nodes using Dagre (excluding containers)
+      // Step 3: Layout only NEW individual nodes using Dagre (excluding containers and existing nodes)
+      // But include edges that connect new nodes to existing nodes for proper positioning
       const individualEdges = prefixEdges.filter(edge => {
         const sourceIsIndividual = individualNodes.some(n => n.id === edge.source)
         const targetIsIndividual = individualNodes.some(n => n.id === edge.target)
         return sourceIsIndividual && targetIsIndividual
       })
 
-      const individualPositions = this.layoutNodesWithDagre(individualNodes, individualEdges)
+      // Only layout new nodes, but consider all edges (including those to existing nodes)
+      const individualPositions = newIndividualNodes.length > 0
+        ? this.layoutNodesWithDagre(newIndividualNodes, individualEdges)
+        : new Map()
 
-      // Step 4: Layout failure container children
+      // Add existing node positions to the map (for container positioning)
+      existingIndividualNodes.forEach(node => {
+        const existingNode = this.nodes.find(n => n.id === node.id)
+        if (existingNode) {
+          individualPositions.set(node.id, {
+            x: existingNode.position.x,
+            y: existingNode.position.y
+          })
+        }
+      })
+
+      // Step 4: Layout failure container children (only new children need layout)
       const failureContainer = prefixContainers.find(c => c.id.includes('failure'))
       const failureLayout = failureContainer
-        ? this.layoutContainerChildren(failureContainer, prefixNodes, prefixEdges)
+        ? this.layoutContainerChildren(failureContainer, prefixNodes, prefixEdges, existingNodeIds)
         : null
 
-      // Step 5: Layout success container children
+      // Step 5: Layout success container children (only new children need layout)
       const successContainer = prefixContainers.find(c => c.id.includes('success'))
       const successLayout = successContainer
-        ? this.layoutContainerChildren(successContainer, prefixNodes, prefixEdges)
+        ? this.layoutContainerChildren(successContainer, prefixNodes, prefixEdges, existingNodeIds)
         : null
 
       // Step 6: Calculate offset to place sub graph in free space
@@ -123,8 +160,13 @@ export default {
       const flowNodes = [...this.nodes]
       const flowEdges = [...this.edges]
 
-      // Add individual nodes with offset
+      // Add individual nodes with offset (only if they don't already exist)
       individualNodes.forEach(node => {
+        // Skip if node already exists
+        if (existingNodeIds.has(node.id)) {
+          return
+        }
+
         const pos = individualPositions.get(node.id)
         if (pos) {
           flowNodes.push({
@@ -136,9 +178,10 @@ export default {
             },
             width: NODE_WIDTH,
             height: NODE_HEIGHT,
-            data: { label: node.id.replace(prefix, '') },
+            data: { label: node.id }, // Keep original ID as label
             draggable: true
           })
+          existingNodeIds.add(node.id)
         }
       })
 
@@ -165,6 +208,11 @@ export default {
         // Add failure container children
         // Note: When parentNode is set, positions are relative to parent, not absolute
         failureContainer.childIds.forEach(childId => {
+          // Skip if child already exists
+          if (existingNodeIds.has(childId)) {
+            return
+          }
+
           const childPos = failureLayout.positions.get(childId)
           if (childPos) {
             flowNodes.push({
@@ -174,11 +222,12 @@ export default {
                 x: childPos.x,  // Relative to container (0,0)
                 y: childPos.y   // Relative to container (0,0)
               },
-              data: { label: childId.replace(prefix, '') },
+              data: { label: childId }, // Keep original ID as label
               parentNode: failureContainer.id,
               extent: 'parent',
               draggable: false
             })
+            existingNodeIds.add(childId)
           }
         })
       }
@@ -206,6 +255,11 @@ export default {
         // Add success container children
         // Note: When parentNode is set, positions are relative to parent, not absolute
         successContainer.childIds.forEach(childId => {
+          // Skip if child already exists
+          if (existingNodeIds.has(childId)) {
+            return
+          }
+
           const childPos = successLayout.positions.get(childId)
           if (childPos) {
             flowNodes.push({
@@ -215,11 +269,12 @@ export default {
                 x: childPos.x,  // Relative to container (0,0)
                 y: childPos.y   // Relative to container (0,0)
               },
-              data: { label: childId.replace(prefix, '') },
+              data: { label: childId }, // Keep original ID as label
               parentNode: successContainer.id,
               extent: 'parent',
               draggable: false
             })
+            existingNodeIds.add(childId)
           }
         })
       }
@@ -229,11 +284,19 @@ export default {
       prefixEdges.forEach(edge => {
         const edgeId = `edge-${edge.source}-${edge.target}`
 
-        // Check if both nodes exist
+        // Skip if edge already exists
+        if (addedEdgeIds.has(edgeId)) {
+          return
+        }
+
+        // Check if both nodes exist (may be existing nodes or new nodes)
         const sourceExists = flowNodes.some(n => n.id === edge.source)
         const targetExists = flowNodes.some(n => n.id === edge.target)
 
-        if (!sourceExists || !targetExists) return
+        if (!sourceExists || !targetExists) {
+          console.warn(`Edge ${edge.source} -> ${edge.target} skipped: one or both nodes don't exist`)
+          return
+        }
 
         // Filter edges between container children in same container (unless explicit)
         const sourceNode = flowNodes.find(n => n.id === edge.source)
@@ -241,24 +304,36 @@ export default {
 
         if (sourceNode?.parentNode && targetNode?.parentNode &&
             sourceNode.parentNode === targetNode.parentNode) {
-          const originalSource = edge.source.replace(prefix, '')
-          const originalTarget = edge.target.replace(prefix, '')
+          // Check if this edge is explicitly defined in the input
           const hasExplicitEdge = newEdges.some(e =>
-            e.source === originalSource && e.target === originalTarget
+            e.source === edge.source && e.target === edge.target
           )
           if (!hasExplicitEdge) return
         }
 
-        if (!addedEdgeIds.has(edgeId)) {
-          flowEdges.push({
-            id: edgeId,
-            source: edge.source,
-            target: edge.target,
-            type: 'bezier',
-            animated: false
-          })
-          addedEdgeIds.add(edgeId)
+        // Check if source is existing node (from original nodes) and target is new node (not in original)
+        const sourceIsExisting = originalExistingNodeIds.has(edge.source)
+        const targetIsNew = !originalExistingNodeIds.has(edge.target)
+
+        const edgeConfig = {
+          id: edgeId,
+          source: edge.source,
+          target: edge.target,
+          type: 'bezier',
+          animated: false
         }
+
+        // If existing node connects to new subgraph, use right handle
+        // Note: For handles to work, nodes need explicit handles defined
+        // Using sourcePosition/targetPosition which should work with default nodes
+        if (sourceIsExisting && targetIsNew) {
+          edgeConfig.sourcePosition = 'right'
+          edgeConfig.targetPosition = 'top'
+          console.log('--------------------', edgeConfig)
+        }
+
+        flowEdges.push(edgeConfig)
+        addedEdgeIds.add(edgeId)
       })
 
       this.nodes = flowNodes
@@ -313,11 +388,20 @@ export default {
     /**
      * Layout container children using Dagre
      */
-    layoutContainerChildren(container, allNodes, allEdges) {
-      const childNodes = allNodes.filter(n => container.childIds.includes(n.id))
-      const childEdges = allEdges.filter(e =>
-        container.childIds.includes(e.source) && container.childIds.includes(e.target)
-      )
+    layoutContainerChildren(container, allNodes, allEdges, existingNodeIds = new Set()) {
+        // Filter to only new child nodes (not already in canvas)
+        const newChildNodes = allNodes.filter(n =>
+          container.childIds.includes(n.id) && !existingNodeIds.has(n.id)
+        )
+        const existingChildNodes = allNodes.filter(n =>
+          container.childIds.includes(n.id) && existingNodeIds.has(n.id)
+        )
+
+        // Use all child nodes for edge filtering (to get all relevant edges)
+        const childNodes = allNodes.filter(n => container.childIds.includes(n.id))
+        const childEdges = allEdges.filter(e =>
+          container.childIds.includes(e.source) && container.childIds.includes(e.target)
+        )
 
       if (childNodes.length === 0) {
         return {
