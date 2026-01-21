@@ -184,7 +184,7 @@ export default {
         : null
 
       // Step 6: Calculate offset to place sub graph in free space
-      const offset = this.calculateSubGraphOffset(individualPositions, failureLayout, successLayout)
+      const offset = this.calculateSubGraphOffset(individualPositions)
 
       // Step 7: Position failure container (left, first child level)
       const failureContainerPos = failureLayout
@@ -193,7 +193,7 @@ export default {
 
       // Step 8: Position success container (right, first child level)
       const successContainerPos = successLayout
-        ? this.positionSuccessContainer(individualPositions, rootNode, successLayout, offset, failureContainerPos, failureLayout, modifiedEdges)
+        ? this.positionSuccessContainer(individualPositions, rootNode, successLayout, offset, failureContainerPos, failureLayout)
         : null
 
       // Step 9: Build and add nodes to canvas
@@ -488,19 +488,11 @@ export default {
      * Layout container children using Dagre
      */
     layoutContainerChildren(container, allNodes, allEdges, existingNodeIds = new Set()) {
-        // Filter to only new child nodes (not already in canvas)
-        const newChildNodes = allNodes.filter(n =>
-          container.childIds.includes(n.id) && !existingNodeIds.has(n.id)
-        )
-        const existingChildNodes = allNodes.filter(n =>
-          container.childIds.includes(n.id) && existingNodeIds.has(n.id)
-        )
-
-        // Use all child nodes for edge filtering (to get all relevant edges)
-        const childNodes = allNodes.filter(n => container.childIds.includes(n.id))
-        const childEdges = allEdges.filter(e =>
-          container.childIds.includes(e.source) && container.childIds.includes(e.target)
-        )
+      // Use all child nodes for edge filtering (to get all relevant edges)
+      const childNodes = allNodes.filter(n => container.childIds.includes(n.id))
+      const childEdges = allEdges.filter(e =>
+        container.childIds.includes(e.source) && container.childIds.includes(e.target)
+      )
 
       if (childNodes.length === 0) {
         return {
@@ -578,7 +570,12 @@ export default {
     /**
      * Calculate offset to place sub graph in free space (bottom right, going down)
      */
-    calculateSubGraphOffset(individualPositions, failureLayout, successLayout) {
+    calculateSubGraphOffset(individualPositions) {
+      if (!individualPositions || individualPositions.size === 0) {
+        const existingMaxY = this.getMaxY()
+        return { x: 0, y: existingMaxY > 0 ? existingMaxY + this.RANK_GAP : 0 }
+      }
+
       // Find bounds of new sub graph (before offset)
       let minX = Infinity
       let minY = Infinity
@@ -611,7 +608,7 @@ export default {
       const level1Y = rootPos.y + NODE_HEIGHT + this.RANK_GAP
 
       // Position to the left of the graph
-      const graphLeftX = this.getGraphLeftX(individualPositions, offset)
+      const graphLeftX = this.getGraphLeftX(individualPositions)
       const failureX = graphLeftX - failureLayout.size.width - this.NODE_GAP
 
       return {
@@ -623,17 +620,9 @@ export default {
     /**
      * Position success container to the right, at first child level
      */
-    positionSuccessContainer(individualPositions, rootNode, successLayout, offset, failureContainerPos, failureLayout, prefixEdges) {
+    positionSuccessContainer(individualPositions, rootNode, successLayout, offset, failureContainerPos, failureLayout) {
       const rootPos = individualPositions.get(rootNode.id)
       if (!rootPos) return null
-
-      // Find level 1 nodes (direct children of root) by checking edges
-      const level1NodeIds = new Set()
-      prefixEdges.forEach(edge => {
-        if (edge.source === rootNode.id) {
-          level1NodeIds.add(edge.target)
-        }
-      })
 
       // Find level 1 Y position (should be same for all level 1 nodes)
       const level1Y = rootPos.y + NODE_HEIGHT + this.RANK_GAP
@@ -669,43 +658,12 @@ export default {
     /**
      * Get leftmost X position of graph
      */
-    getGraphLeftX(individualPositions, offset) {
+    getGraphLeftX(individualPositions) {
       let minX = Infinity
       individualPositions.forEach(pos => {
         minX = Math.min(minX, pos.x)
       })
       return minX === Infinity ? 0 : minX
-    },
-
-    /**
-     * Get rightmost X position of graph
-     */
-    getGraphRightX(individualPositions, offset) {
-      let maxX = -Infinity
-      individualPositions.forEach(pos => {
-        maxX = Math.max(maxX, pos.x + NODE_WIDTH)
-      })
-      return maxX === -Infinity ? 0 : maxX
-    },
-
-    /**
-     * Get maximum X position of existing nodes at a specific Y level (within tolerance)
-     */
-    getMaxXAtLevel(targetY, tolerance = 100) {
-      if (this.nodes.length === 0) return 0
-
-      let maxX = -Infinity
-      this.nodes.forEach(node => {
-        if (!node.parentNode) {
-          const nodeY = node.position.y
-          // Check if node is at similar Y level (same rank)
-          if (Math.abs(nodeY - targetY) <= tolerance) {
-            const width = node.width || (node.style?.width ? parseInt(node.style.width) : NODE_WIDTH)
-            maxX = Math.max(maxX, node.position.x + width)
-          }
-        }
-      })
-      return maxX === -Infinity ? 0 : maxX
     },
 
     /**
